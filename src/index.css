@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand-primary: #0f766e;
+  --brand-secondary: #f59e0b;
+  --surface-bg: #f2f6f7;
+  --surface-card: #ffffff;
+  --surface-border: #d4dde2;
+  --surface-text: #0f172a;
+  --surface-soft-text: #4b5563;
+  --surface-muted: #ebf0f3;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.dark {
+  --surface-bg: #0b1220;
+  --surface-card: #111c2d;
+  --surface-border: #243246;
+  --surface-text: #e2e8f0;
+  --surface-soft-text: #a8b4c7;
+  --surface-muted: #1a2739;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--surface-bg);
+  color: var(--surface-text);
+}
+
+.ticker-wrap {
+  overflow: hidden;
+}
+
+.ticker-track {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+  gap: 3rem;
+  white-space: nowrap;
+  animation: ticker-slide 28s linear infinite;
+}
+
+.ticker-text {
+  flex: none;
+}
+
+@keyframes ticker-slide {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
