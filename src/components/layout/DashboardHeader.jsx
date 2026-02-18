@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import SettingsButton from '../ui/SettingsButton'
 import ThemeToggle from '../ui/ThemeToggle'
 
@@ -14,23 +15,50 @@ const modeMap = {
   },
 }
 
-function DashboardHeader({ activeMode, theme, onToggleTheme, onOpenSettings }) {
+function DashboardHeader({
+  activeMode,
+  theme,
+  onToggleTheme,
+  onOpenSettings,
+  schoolName,
+  schoolLogoUrl,
+  schoolLogoFallbackUrl,
+}) {
   const modeBadge = modeMap[activeMode] || modeMap.rfid
-  const schoolName = import.meta.env.VITE_SCHOOL_NAME || 'SMK STELA INDONESIA'
-  const schoolLogoUrl = import.meta.env.VITE_SCHOOL_LOGO_URL || ''
+  const resolvedSchoolName =
+    schoolName || import.meta.env.VITE_SCHOOL_NAME || 'SMK STELA INDONESIA'
+  const resolvedSchoolLogoUrl =
+    schoolLogoUrl || import.meta.env.VITE_SCHOOL_LOGO_URL || ''
+  const [logoSrc, setLogoSrc] = useState(resolvedSchoolLogoUrl)
+
+  useEffect(() => {
+    setLogoSrc(resolvedSchoolLogoUrl)
+  }, [resolvedSchoolLogoUrl])
 
   return (
     <header className="flex flex-col gap-4 rounded-xl border border-surface-border bg-surface-muted p-6 sm:flex-row sm:items-end sm:justify-between">
       <div>
         <div className="flex items-center gap-3">
-          {schoolLogoUrl ? (
-            <img
-              src={schoolLogoUrl}
-              alt="Logo Sekolah"
-              className="h-11 w-11 rounded-lg border border-surface-border object-cover"
-            />
+          {logoSrc ? (
+            <div className="w-full max-w-24 rounded-lg border border-surface-border bg-white p-4">
+              <img
+                src={logoSrc}
+                alt="Logo Sekolah"
+                className="w-full h-auto object-contain"
+                onError={() => {
+                  if (
+                    schoolLogoFallbackUrl &&
+                    logoSrc !== schoolLogoFallbackUrl
+                  ) {
+                    setLogoSrc(schoolLogoFallbackUrl)
+                    return
+                  }
+                  setLogoSrc('')
+                }}
+              />
+            </div>
           ) : (
-            <div className="flex h-24 w-24 items-center justify-center rounded-lg bg-brand-primary text-xs font-bold text-white">
+            <div className="flex w-full max-w-24 items-center justify-center rounded-lg bg-brand-primary p-6 text-xs font-bold text-white">
               LOGO
             </div>
           )}
@@ -39,7 +67,7 @@ function DashboardHeader({ activeMode, theme, onToggleTheme, onOpenSettings }) {
               Selamat Datang di
             </h1>{' '}
             <p className="text-5xl font-bold text-brand-primary">
-              {schoolName}
+              {resolvedSchoolName}
             </p>
           </div>
         </div>

@@ -10,9 +10,11 @@ import { useAttendanceStats } from './hooks/useAttendanceStats'
 import { useInternetStatus } from './hooks/useInternetStatus'
 import { useRealtimeDashboard } from './hooks/useRealtimeDashboard'
 import { useScanLatest } from './hooks/useScanLatest'
+import { useSchools } from './hooks/useSchools'
 import { useStudents } from './hooks/useStudents'
 import { useTheme } from './hooks/useTheme'
 import { showErrorAlert } from './lib/alerts'
+import { buildSchoolLogoUrl } from './services/schoolApi'
 
 const RFID_SLOTS = Array.from({ length: 6 }, (_, index) => ({
   id: `RFID_${index + 1}`,
@@ -23,6 +25,8 @@ const VALID_MODES = new Set(['rfid', 'scan'])
 const CAMERA_QUALITY_STORAGE_KEY = 'stela-camera-quality'
 const VALID_CAMERA_QUALITY = new Set(['low', 'medium', 'high'])
 const RFID_PORTS_STORAGE_KEY = 'stela-rfid-ports'
+const SCAN_DEVICE_ID_STORAGE_KEY = 'stela-scan-device-id'
+const SCHOOL_ID_STORAGE_KEY = 'stela-school-id'
 
 function getStoredActiveMode() {
   try {
@@ -75,9 +79,10 @@ function getStoredRfidPorts() {
 
     return RFID_SLOTS.reduce((accumulator, slot) => {
       const value = parsed?.[slot.id]
-      accumulator[slot.id] = typeof value === 'string' && value.trim()
-        ? value.trim()
-        : defaults[slot.id]
+      accumulator[slot.id] =
+        typeof value === 'string' && value.trim()
+          ? value.trim()
+          : defaults[slot.id]
       return accumulator
     }, {})
   } catch {
@@ -88,6 +93,39 @@ function getStoredRfidPorts() {
 function setStoredRfidPorts(ports) {
   try {
     window.localStorage.setItem(RFID_PORTS_STORAGE_KEY, JSON.stringify(ports))
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function getStoredScanDeviceId() {
+  try {
+    const saved = window.localStorage.getItem(SCAN_DEVICE_ID_STORAGE_KEY)
+    return saved?.trim() ? saved.trim() : 'DEV2026'
+  } catch {
+    return 'DEV2026'
+  }
+}
+
+function setStoredScanDeviceId(deviceId) {
+  try {
+    window.localStorage.setItem(SCAN_DEVICE_ID_STORAGE_KEY, deviceId)
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function getStoredSchoolId() {
+  try {
+    return window.localStorage.getItem(SCHOOL_ID_STORAGE_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+function setStoredSchoolId(schoolId) {
+  try {
+    window.localStorage.setItem(SCHOOL_ID_STORAGE_KEY, schoolId)
   } catch {
     // ignore storage errors
   }
@@ -142,7 +180,7 @@ function mapScanPayloadToStudent(payload) {
     id: payload.iduser || payload.serial || 'SCAN',
     name: payload.user_name || payload.serial || payload.iduser || 'Siswa',
     nis: payload.serial || payload.iduser || '-',
-    classroom: payload.idclass || '-',
+    classroom: payload.class_name || payload.idclass || '-',
     photoUrl: null,
     rfidGate: null,
     attendanceStatus: mapInfoToStatus(payload.info),
@@ -156,10 +194,13 @@ function App() {
   const [activeMode, setActiveMode] = useState(getStoredActiveMode)
   const [cameraQuality, setCameraQuality] = useState(getStoredCameraQuality)
   const [rfidPorts, setRfidPorts] = useState(getStoredRfidPorts)
+  const [scanDeviceId, setScanDeviceId] = useState(getStoredScanDeviceId)
+  const [selectedSchoolId, setSelectedSchoolId] = useState(getStoredSchoolId)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const studentsQuery = useStudents()
   const statsQuery = useAttendanceStats()
   const scanLatestQuery = useScanLatest()
+  const schoolsQuery = useSchools()
   const { isOnline, pingMs, statusLabel } = useInternetStatus()
   useRealtimeDashboard()
   const { theme, toggleTheme } = useTheme()
@@ -169,6 +210,16 @@ function App() {
   const isLoading = studentsQuery.isLoading || statsQuery.isLoading
   const students = studentsQuery.data ?? []
   const stats = statsQuery.data
+  const schools = schoolsQuery.data ?? []
+
+  const selectedSchool = useMemo(() => {
+    if (!schools.length) return null
+    if (selectedSchoolId) {
+      const matched = schools.find((school) => school.id === selectedSchoolId)
+      if (matched) return matched
+    }
+    return schools[0]
+  }, [schools, selectedSchoolId])
 
   const latestStudentBySlot = useMemo(
     () =>
@@ -203,19 +254,33 @@ function App() {
     [scanLatestQuery.data]
   )
   const displayedScannedStudent = liveScannedStudent
+  const resolvedSchoolName =
+    selectedSchool?.name || import.meta.env.VITE_SCHOOL_NAME || 'SMK STELA INDONESIA'
+  const localSchoolLogoUrl = selectedSchool?.id
+    ? buildSchoolLogoUrl(selectedSchool.id)
+    : import.meta.env.VITE_SCHOOL_LOGO_URL || ''
+  const remoteAssetBaseUrl =
+    (import.meta.env.VITE_MITRA_ASSET_BASE_URL || 'https://mitra.stela.id').replace(
+      /\/+$/,
+      ''
+    )
+  const remoteSchoolLogoUrl = selectedSchool?.pathFile
+    ? `${remoteAssetBaseUrl}/${String(selectedSchool.pathFile).replace(/^\/+/, '')}`
+    : ''
+  const resolvedSchoolLogoUrl = localSchoolLogoUrl
 
   const statCards = useMemo(() => {
     if (!stats) return []
 
     return [
-      { label: 'Jumlah Datang', value: stats.arrivedCount, tone: 'primary' },
-      { label: 'Jumlah Terlambat', value: stats.lateCount, tone: 'secondary' },
-      { label: 'Jumlah Tidak Tap', value: stats.notTapCount, tone: 'danger' },
+      { label: 'Datang', value: stats.arrivedCount, tone: 'primary' },
+      { label: 'Terlambat', value: stats.lateCount, tone: 'secondary' },
+      { label: 'Tidak Absen', value: stats.notTapCount, tone: 'danger' },
     ]
   }, [stats])
 
   useEffect(() => {
-    const error = studentsQuery.error || statsQuery.error
+    const error = studentsQuery.error || statsQuery.error || schoolsQuery.error
     if (!error) return
 
     const message = error.message || 'Gagal memuat data dashboard.'
@@ -223,7 +288,7 @@ function App() {
 
     lastErrorRef.current = message
     showErrorAlert(message)
-  }, [studentsQuery.error, statsQuery.error])
+  }, [studentsQuery.error, statsQuery.error, schoolsQuery.error])
 
   useEffect(() => {
     setStoredActiveMode(activeMode)
@@ -236,6 +301,27 @@ function App() {
   useEffect(() => {
     setStoredRfidPorts(rfidPorts)
   }, [rfidPorts])
+
+  useEffect(() => {
+    setStoredScanDeviceId(scanDeviceId)
+  }, [scanDeviceId])
+
+  useEffect(() => {
+    if (!schools.length) return
+    if (!selectedSchoolId) {
+      setSelectedSchoolId(schools[0].id)
+      return
+    }
+    const exists = schools.some((school) => school.id === selectedSchoolId)
+    if (!exists) {
+      setSelectedSchoolId(schools[0].id)
+    }
+  }, [schools, selectedSchoolId])
+
+  useEffect(() => {
+    if (!selectedSchoolId) return
+    setStoredSchoolId(selectedSchoolId)
+  }, [selectedSchoolId])
 
   function handleChangeRfidPort(slotId, value) {
     setRfidPorts((previous) => ({
@@ -260,6 +346,9 @@ function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        schoolName={resolvedSchoolName}
+        schoolLogoUrl={resolvedSchoolLogoUrl}
+        schoolLogoFallbackUrl={remoteSchoolLogoUrl}
       />
 
       <section className="grid items-start gap-4 lg:grid-cols-[minmax(0,3.65fr)_minmax(13.5rem,0.62fr)]">
@@ -302,6 +391,7 @@ function App() {
             <ScanAttendancePanel
               student={displayedScannedStudent}
               cameraQuality={cameraQuality}
+              scanDeviceId={scanDeviceId}
             />
           ) : (
             <section className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -384,6 +474,11 @@ function App() {
         onChangeCameraQuality={setCameraQuality}
         rfidPorts={rfidPorts}
         onChangeRfidPort={handleChangeRfidPort}
+        scanDeviceId={scanDeviceId}
+        onChangeScanDeviceId={setScanDeviceId}
+        schools={schools}
+        selectedSchoolId={selectedSchool?.id || ''}
+        onChangeSelectedSchoolId={setSelectedSchoolId}
       />
 
       <footer className="flex flex-col gap-2 rounded-xl border border-surface-border bg-surface-card px-3 py-2 sm:flex-row sm:items-center sm:justify-between">

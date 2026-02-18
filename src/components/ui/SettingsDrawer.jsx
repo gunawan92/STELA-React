@@ -9,9 +9,15 @@ function SettingsDrawer({
   onChangeCameraQuality,
   rfidPorts,
   onChangeRfidPort,
+  scanDeviceId,
+  onChangeScanDeviceId,
+  schools,
+  selectedSchoolId,
+  onChangeSelectedSchoolId,
 }) {
   const isCameraSettingDisabled = activeMode === 'rfid'
   const isRfidSettingDisabled = activeMode === 'scan'
+  const schoolOptions = Array.isArray(schools) ? schools : []
 
   useEffect(() => {
     if (!isOpen) return
@@ -35,8 +41,8 @@ function SettingsDrawer({
         onClick={onClose}
       />
 
-      <aside className="absolute right-0 top-0 h-full w-full max-w-md border-l border-surface-border bg-surface-card p-5 shadow-2xl">
-        <div className="mb-5 flex items-center justify-between">
+      <aside className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto border-l border-surface-border bg-surface-card p-4 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
           <h2 className="text-xl font-bold text-surface-text">
             Pengaturan Frontend
           </h2>
@@ -49,7 +55,7 @@ function SettingsDrawer({
           </button>
         </div>
 
-        <section className="space-y-3 rounded-xl border border-surface-border bg-surface-muted/40 p-4">
+        <section className="space-y-2 rounded-xl border border-surface-border bg-surface-muted/40 p-3">
           <p className="text-sm font-semibold text-surface-text">Mode Absensi</p>
           <div className="inline-flex w-full rounded-lg border border-surface-border bg-surface-card p-1">
             <button
@@ -80,7 +86,7 @@ function SettingsDrawer({
           </p>
         </section>
 
-        <section className="mt-4 space-y-3 rounded-xl border border-surface-border bg-surface-muted/40 p-4">
+        <section className="mt-3 space-y-2 rounded-xl border border-surface-border bg-surface-muted/40 p-3">
           <p className="text-sm font-semibold text-surface-text">
             RFID Port Mapping
           </p>
@@ -115,7 +121,40 @@ function SettingsDrawer({
           )}
         </section>
 
-        <section className="mt-4 space-y-3 rounded-xl border border-surface-border bg-surface-muted/40 p-4">
+        <section className="mt-3 space-y-2 rounded-xl border border-surface-border bg-surface-muted/40 p-3">
+          <p className="text-sm font-semibold text-surface-text">Sekolah Mitra</p>
+          <select
+            value={selectedSchoolId}
+            onChange={(event) => onChangeSelectedSchoolId(event.target.value)}
+            className="w-full rounded-lg border border-surface-border bg-surface-card px-3 py-2 text-sm font-medium text-surface-text outline-none transition focus:border-brand-primary"
+          >
+            {schoolOptions.length ? null : <option value="">Belum ada data sekolah</option>}
+            {schoolOptions.map((school) => (
+              <option key={school.id} value={school.id}>
+                {school.name} ({school.id})
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-surface-soft">
+            Pilih sekolah mitra untuk menampilkan nama dan logo tanpa upload ulang.
+          </p>
+        </section>
+
+        <section className="mt-3 space-y-2 rounded-xl border border-surface-border bg-surface-muted/40 p-3">
+          <p className="text-sm font-semibold text-surface-text">Scan Device ID</p>
+          <input
+            type="text"
+            value={scanDeviceId}
+            onChange={(event) => onChangeScanDeviceId(event.target.value)}
+            placeholder="Contoh: DEV2026"
+            className="w-full rounded-lg border border-surface-border bg-surface-card px-3 py-2 text-sm font-medium text-surface-text outline-none transition focus:border-brand-primary"
+          />
+          <p className="text-xs text-surface-soft">
+            Device ID ini dikirim ke backend saat scan QR untuk menandai sumber perangkat.
+          </p>
+        </section>
+
+        <section className="mt-3 space-y-2 rounded-xl border border-surface-border bg-surface-muted/40 p-3">
           <p className="text-sm font-semibold text-surface-text">
             Resolusi Streaming Kamera
           </p>
