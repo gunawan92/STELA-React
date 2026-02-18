@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import DashboardHeader from './components/layout/DashboardHeader'
 import PageContainer from './components/layout/PageContainer'
+import ScanAttendancePanel from './components/scan/ScanAttendancePanel'
 import StatsGrid from './components/stats/StatsGrid'
 import StudentCard from './components/students/StudentCard'
 import StudentSkeleton from './components/students/StudentSkeleton'
@@ -16,6 +17,25 @@ const RFID_SLOTS = Array.from({ length: 6 }, (_, index) => ({
   id: `RFID_${index + 1}`,
   label: `RFID ${index + 1}`,
 }))
+const ACTIVE_MODE_STORAGE_KEY = 'stela-active-mode'
+const VALID_MODES = new Set(['rfid', 'scan'])
+
+function getStoredActiveMode() {
+  try {
+    const savedMode = window.localStorage.getItem(ACTIVE_MODE_STORAGE_KEY)
+    return VALID_MODES.has(savedMode) ? savedMode : 'rfid'
+  } catch {
+    return 'rfid'
+  }
+}
+
+function setStoredActiveMode(mode) {
+  try {
+    window.localStorage.setItem(ACTIVE_MODE_STORAGE_KEY, mode)
+  } catch {
+    // ignore storage errors
+  }
+}
 
 const SCHOOL_ANNOUNCEMENTS = (
   import.meta.env.VITE_SCHOOL_ANNOUNCEMENTS ||
@@ -44,11 +64,13 @@ function getTapOrderValue(student) {
 }
 
 function App() {
+  const [activeMode, setActiveMode] = useState(getStoredActiveMode)
   const studentsQuery = useStudents()
   const statsQuery = useAttendanceStats()
   const { isOnline, pingMs, statusLabel } = useInternetStatus()
   const { connectionStatus } = useRealtimeDashboard()
   const { theme, toggleTheme } = useTheme()
+
   const lastErrorRef = useRef('')
 
   const isLoading = studentsQuery.isLoading || statsQuery.isLoading
@@ -76,6 +98,13 @@ function App() {
       }),
     [students]
   )
+  const latestScannedStudent = useMemo(
+    () =>
+      students
+        .filter((student) => student.attendanceStatus !== 'BELUM_TAP')
+        .sort((a, b) => getTapOrderValue(b) - getTapOrderValue(a))[0] || null,
+    [students]
+  )
 
   const statCards = useMemo(() => {
     if (!stats) return []
@@ -97,6 +126,10 @@ function App() {
     lastErrorRef.current = message
     showErrorAlert(message)
   }, [studentsQuery.error, statsQuery.error])
+
+  useEffect(() => {
+    setStoredActiveMode(activeMode)
+  }, [activeMode])
 
   async function handleRefresh() {
     const [studentsResult, statsResult] = await Promise.all([
@@ -121,16 +154,42 @@ function App() {
 
       <section className="grid items-start gap-4 lg:grid-cols-[minmax(0,3.65fr)_minmax(13.5rem,0.62fr)]">
         <div className="space-y-4">
+          <div className="inline-flex w-fit rounded-lg border border-surface-border bg-surface-card p-1">
+            <button
+              type="button"
+              onClick={() => setActiveMode('rfid')}
+              className={`rounded-md px-4 py-2 text-sm font-semibold transition ${
+                activeMode === 'rfid'
+                  ? 'bg-brand-primary text-white'
+                  : 'text-surface-soft hover:bg-surface-muted'
+              }`}
+            >
+              Mode RFID
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMode('scan')}
+              className={`rounded-md px-4 py-2 text-sm font-semibold transition ${
+                activeMode === 'scan'
+                  ? 'bg-brand-primary text-white'
+                  : 'text-surface-soft hover:bg-surface-muted'
+              }`}
+            >
+              Mode Scan
+            </button>
+          </div>
           <div>
-            <h2 className="text-xl font-bold text-surface-text">Data Siswa</h2>
             <p className="text-sm text-surface-soft">
-              Siswa tap kartu, respon muncul realtime di panel RFID
-              masing-masing.
+              {activeMode === 'rfid'
+                ? 'Siswa tap kartu, respon muncul realtime di panel RFID masing-masing.'
+                : 'Scan QR Kartu dari kamera, nama siswa akan tampil setelah absen.'}
             </p>
           </div>
 
           {isLoading ? (
             <StudentSkeleton count={6} columns={3} />
+          ) : activeMode === 'scan' ? (
+            <ScanAttendancePanel student={latestScannedStudent} />
           ) : (
             <section className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {latestStudentBySlot.map((slot) => (

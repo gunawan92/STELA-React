@@ -55,16 +55,15 @@ function DashboardHeader({
               LOGO
             </div>
           )}
+          <div className="hidden text-sm text-surface-soft sm:block">
+          <h1 className="mt-2 text-2xl font-bold text-surface-text sm:text-3xl">
+            Selamat Datang di
+          </h1>{' '}
+          <p className="text-5xl font-semibold text-brand-primary">
+            {schoolName}
+          </p>
+          </div>
         </div>
-        <h1 className="mt-2 text-2xl font-bold text-surface-text sm:text-3xl">
-          Selamat Datang di
-        </h1>{' '}
-        <p className="text-5xl font-semibold text-brand-primary">
-          {schoolName}
-        </p>
-        <p className="mt-1 text-sm text-surface-soft">
-          Semangat pagi password K23F
-        </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
