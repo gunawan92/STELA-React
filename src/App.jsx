@@ -5,10 +5,11 @@ import ScanAttendancePanel from './components/scan/ScanAttendancePanel'
 import StatsGrid from './components/stats/StatsGrid'
 import StudentCard from './components/students/StudentCard'
 import StudentSkeleton from './components/students/StudentSkeleton'
-import AnnouncementTicker from './components/ui/AnnouncementTicker'
+import SettingsDrawer from './components/ui/SettingsDrawer'
 import { useAttendanceStats } from './hooks/useAttendanceStats'
 import { useInternetStatus } from './hooks/useInternetStatus'
 import { useRealtimeDashboard } from './hooks/useRealtimeDashboard'
+import { useScanLatest } from './hooks/useScanLatest'
 import { useStudents } from './hooks/useStudents'
 import { useTheme } from './hooks/useTheme'
 import { showErrorAlert } from './lib/alerts'
@@ -19,6 +20,9 @@ const RFID_SLOTS = Array.from({ length: 6 }, (_, index) => ({
 }))
 const ACTIVE_MODE_STORAGE_KEY = 'stela-active-mode'
 const VALID_MODES = new Set(['rfid', 'scan'])
+const CAMERA_QUALITY_STORAGE_KEY = 'stela-camera-quality'
+const VALID_CAMERA_QUALITY = new Set(['low', 'medium', 'high'])
+const RFID_PORTS_STORAGE_KEY = 'stela-rfid-ports'
 
 function getStoredActiveMode() {
   try {
@@ -32,6 +36,58 @@ function getStoredActiveMode() {
 function setStoredActiveMode(mode) {
   try {
     window.localStorage.setItem(ACTIVE_MODE_STORAGE_KEY, mode)
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function getStoredCameraQuality() {
+  try {
+    const saved = window.localStorage.getItem(CAMERA_QUALITY_STORAGE_KEY)
+    return VALID_CAMERA_QUALITY.has(saved) ? saved : 'medium'
+  } catch {
+    return 'medium'
+  }
+}
+
+function setStoredCameraQuality(quality) {
+  try {
+    window.localStorage.setItem(CAMERA_QUALITY_STORAGE_KEY, quality)
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function getDefaultRfidPorts() {
+  return RFID_SLOTS.reduce((accumulator, slot, index) => {
+    accumulator[slot.id] = `COM${index + 1}`
+    return accumulator
+  }, {})
+}
+
+function getStoredRfidPorts() {
+  try {
+    const saved = window.localStorage.getItem(RFID_PORTS_STORAGE_KEY)
+    if (!saved) return getDefaultRfidPorts()
+
+    const parsed = JSON.parse(saved)
+    const defaults = getDefaultRfidPorts()
+
+    return RFID_SLOTS.reduce((accumulator, slot) => {
+      const value = parsed?.[slot.id]
+      accumulator[slot.id] = typeof value === 'string' && value.trim()
+        ? value.trim()
+        : defaults[slot.id]
+      return accumulator
+    }, {})
+  } catch {
+    return getDefaultRfidPorts()
+  }
+}
+
+function setStoredRfidPorts(ports) {
+  try {
+    window.localStorage.setItem(RFID_PORTS_STORAGE_KEY, JSON.stringify(ports))
   } catch {
     // ignore storage errors
   }
@@ -63,18 +119,54 @@ function getTapOrderValue(student) {
   return -1
 }
 
+function mapInfoToStatus(info) {
+  const normalized = String(info || '').toLowerCase()
+  if (normalized === 'terlambat') return 'TERLAMBAT'
+  if (normalized === 'hadir') return 'DATANG'
+  return 'DATANG'
+}
+
+function normalizeScanDateTime(value) {
+  if (!value) return null
+  if (typeof value === 'string' && value.includes('T')) return value
+  if (typeof value === 'string' && value.includes(' ')) {
+    return value.replace(' ', 'T')
+  }
+  return null
+}
+
+function mapScanPayloadToStudent(payload) {
+  if (!payload) return null
+
+  return {
+    id: payload.iduser || payload.serial || 'SCAN',
+    name: payload.user_name || payload.serial || payload.iduser || 'Siswa',
+    nis: payload.serial || payload.iduser || '-',
+    classroom: payload.idclass || '-',
+    photoUrl: null,
+    rfidGate: null,
+    attendanceStatus: mapInfoToStatus(payload.info),
+    attendanceLabel: payload.info || 'Hadir',
+    lastCheckIn: payload.time || null,
+    lastTapAt: normalizeScanDateTime(payload.tanggal_waktu),
+  }
+}
+
 function App() {
   const [activeMode, setActiveMode] = useState(getStoredActiveMode)
+  const [cameraQuality, setCameraQuality] = useState(getStoredCameraQuality)
+  const [rfidPorts, setRfidPorts] = useState(getStoredRfidPorts)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const studentsQuery = useStudents()
   const statsQuery = useAttendanceStats()
+  const scanLatestQuery = useScanLatest()
   const { isOnline, pingMs, statusLabel } = useInternetStatus()
-  const { connectionStatus } = useRealtimeDashboard()
+  useRealtimeDashboard()
   const { theme, toggleTheme } = useTheme()
 
   const lastErrorRef = useRef('')
 
   const isLoading = studentsQuery.isLoading || statsQuery.isLoading
-  const isFetching = studentsQuery.isFetching || statsQuery.isFetching
   const students = studentsQuery.data ?? []
   const stats = statsQuery.data
 
@@ -94,9 +186,10 @@ function App() {
         return {
           ...slot,
           student: latestStudent,
+          configuredPort: rfidPorts[slot.id] || '-',
         }
       }),
-    [students]
+    [students, rfidPorts]
   )
   const latestScannedStudent = useMemo(
     () =>
@@ -105,6 +198,11 @@ function App() {
         .sort((a, b) => getTapOrderValue(b) - getTapOrderValue(a))[0] || null,
     [students]
   )
+  const liveScannedStudent = useMemo(
+    () => mapScanPayloadToStudent(scanLatestQuery.data),
+    [scanLatestQuery.data]
+  )
+  const displayedScannedStudent = liveScannedStudent
 
   const statCards = useMemo(() => {
     if (!stats) return []
@@ -131,30 +229,42 @@ function App() {
     setStoredActiveMode(activeMode)
   }, [activeMode])
 
-  async function handleRefresh() {
-    const [studentsResult, statsResult] = await Promise.all([
-      studentsQuery.refetch(),
-      statsQuery.refetch(),
-    ])
+  useEffect(() => {
+    setStoredCameraQuality(cameraQuality)
+  }, [cameraQuality])
 
-    return {
-      error: studentsResult.error || statsResult.error || null,
-    }
+  useEffect(() => {
+    setStoredRfidPorts(rfidPorts)
+  }, [rfidPorts])
+
+  function handleChangeRfidPort(slotId, value) {
+    setRfidPorts((previous) => ({
+      ...previous,
+      [slotId]: value,
+    }))
   }
+
+  useEffect(() => {
+    if (!isSettingsOpen) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [isSettingsOpen])
 
   return (
     <PageContainer>
       <DashboardHeader
-        connectionStatus={connectionStatus}
-        isRefreshing={isFetching}
-        onRefresh={handleRefresh}
+        activeMode={activeMode}
         theme={theme}
         onToggleTheme={toggleTheme}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       <section className="grid items-start gap-4 lg:grid-cols-[minmax(0,3.65fr)_minmax(13.5rem,0.62fr)]">
         <div className="space-y-4">
-          <div className="inline-flex w-fit rounded-lg border border-surface-border bg-surface-card p-1">
+          {/* <div className="inline-flex w-fit rounded-lg border border-surface-border bg-surface-card p-1">
             <button
               type="button"
               onClick={() => setActiveMode('rfid')}
@@ -177,11 +287,11 @@ function App() {
             >
               Mode Scan
             </button>
-          </div>
+          </div> */}
           <div>
             <p className="text-sm text-surface-soft">
               {activeMode === 'rfid'
-                ? 'Siswa tap kartu, respon muncul realtime di panel RFID masing-masing.'
+                ? 'Siswa tap kartu, respon muncul realtime di panel RFID masing-masing. Mapping port per RFID dapat dilihat di panel dan di Settings.'
                 : 'Scan QR Kartu dari kamera, nama siswa akan tampil setelah absen.'}
             </p>
           </div>
@@ -189,7 +299,10 @@ function App() {
           {isLoading ? (
             <StudentSkeleton count={6} columns={3} />
           ) : activeMode === 'scan' ? (
-            <ScanAttendancePanel student={latestScannedStudent} />
+            <ScanAttendancePanel
+              student={displayedScannedStudent}
+              cameraQuality={cameraQuality}
+            />
           ) : (
             <section className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {latestStudentBySlot.map((slot) => (
@@ -198,9 +311,14 @@ function App() {
                   className="min-h-[18rem] rounded-xl border border-surface-border bg-surface-card p-4 shadow-sm"
                 >
                   <div className="mb-3 flex items-center justify-between gap-2">
-                    <h3 className="text-lg font-bold text-surface-text">
-                      {slot.label}
-                    </h3>
+                    <div>
+                      <h3 className="text-lg font-bold text-surface-text">
+                        {slot.label}
+                      </h3>
+                      <p className="text-xs font-medium text-surface-soft">
+                        Port: {slot.configuredPort}
+                      </p>
+                    </div>
                     <span
                       className={`rounded-full px-2 py-1 text-xs font-semibold ${
                         slot.student
@@ -234,7 +352,7 @@ function App() {
           )}
         </div>
 
-        <aside className="space-y-3 rounded-2xl border border-surface-border bg-surface-muted/40 p-4 mt-14">
+        <aside className="space-y-3 rounded-2xl border border-surface-border bg-surface-muted/40 p-4 mt-6 lg:mt-0">
           <div>
             <h2 className="text-xl font-bold text-surface-text">
               Statistik Harian
@@ -255,11 +373,23 @@ function App() {
         </aside>
       </section>
 
-      <AnnouncementTicker items={SCHOOL_ANNOUNCEMENTS} />
+      {/* <AnnouncementTicker items={SCHOOL_ANNOUNCEMENTS} /> */}
+
+      <SettingsDrawer
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        activeMode={activeMode}
+        onChangeMode={setActiveMode}
+        cameraQuality={cameraQuality}
+        onChangeCameraQuality={setCameraQuality}
+        rfidPorts={rfidPorts}
+        onChangeRfidPort={handleChangeRfidPort}
+      />
 
       <footer className="flex flex-col gap-2 rounded-xl border border-surface-border bg-surface-card px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-xs font-semibold tracking-wide text-surface-soft">
-          Powered by STELA Indonesia
+        <p className="text-xs tracking-wide">
+          <span className="font-medium text-surface-soft">Powered by </span>
+          <span className="font-bold text-brand-primary">STELA Indonesia</span>
         </p>
         <p className="inline-flex items-center gap-2 text-[11px] font-medium text-surface-soft">
           <span

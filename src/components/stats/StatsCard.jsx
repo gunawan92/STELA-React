@@ -1,13 +1,13 @@
 const toneStyle = {
   primary: {
-    borderColor: 'var(--brand-primary)',
+    borderColor: '#0f766e',
     backgroundColor: 'rgba(15, 118, 110, 0.12)',
-    color: 'var(--brand-primary)',
+    color: '#0f766e',
   },
   secondary: {
-    borderColor: 'var(--brand-secondary)',
+    borderColor: '#f59e0b',
     backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    color: 'var(--brand-secondary)',
+    color: '#f59e0b',
   },
   danger: {
     borderColor: '#dc2626',
@@ -17,8 +17,8 @@ const toneStyle = {
 }
 
 const solidToneClass = {
-  primary: 'bg-brand-primary',
-  secondary: 'bg-brand-secondary',
+  primary: 'bg-teal-700',
+  secondary: 'bg-amber-500',
   danger: 'bg-rose-600',
 }
 

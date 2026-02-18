@@ -1,42 +1,21 @@
-import ReloadButton from '../ui/ReloadButton'
+import SettingsButton from '../ui/SettingsButton'
 import ThemeToggle from '../ui/ThemeToggle'
 
-const connectionMap = {
-  connected: {
-    label: 'Realtime Aktif',
+const modeMap = {
+  rfid: {
+    label: 'RFID',
     className:
-      'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300',
+      'bg-slate-900 text-slate-100 dark:bg-slate-100 dark:text-slate-900',
   },
-  connecting: {
-    label: 'Menghubungkan...',
+  scan: {
+    label: 'Scan',
     className:
-      'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300',
-  },
-  disconnected: {
-    label: 'Realtime Putus',
-    className:
-      'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300',
-  },
-  error: {
-    label: 'Error Realtime',
-    className:
-      'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300',
-  },
-  mock: {
-    label: 'Mode Mock Lokal',
-    className:
-      'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
+      'bg-amber-100 text-amber-800 dark:bg-amber-400/25 dark:text-amber-200',
   },
 }
 
-function DashboardHeader({
-  connectionStatus,
-  onRefresh,
-  isRefreshing,
-  theme,
-  onToggleTheme,
-}) {
-  const connection = connectionMap[connectionStatus] || connectionMap.mock
+function DashboardHeader({ activeMode, theme, onToggleTheme, onOpenSettings }) {
+  const modeBadge = modeMap[activeMode] || modeMap.rfid
   const schoolName = import.meta.env.VITE_SCHOOL_NAME || 'SMK STELA INDONESIA'
   const schoolLogoUrl = import.meta.env.VITE_SCHOOL_LOGO_URL || ''
 
@@ -56,24 +35,24 @@ function DashboardHeader({
             </div>
           )}
           <div className="hidden text-sm text-surface-soft sm:block">
-          <h1 className="mt-2 text-2xl font-bold text-surface-text sm:text-3xl">
-            Selamat Datang di
-          </h1>{' '}
-          <p className="text-5xl font-semibold text-brand-primary">
-            {schoolName}
-          </p>
+            <h1 className="mt-2 text-2xl font-medium text-surface-text sm:text-3xl">
+              Selamat Datang di
+            </h1>{' '}
+            <p className="text-5xl font-bold text-brand-primary">
+              {schoolName}
+            </p>
           </div>
         </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <span
-          className={`rounded-full px-3 py-1 text-xs font-semibold ${connection.className}`}
+          className={`rounded-full px-3 py-1 text-xs font-semibold ${modeBadge.className}`}
         >
-          {connection.label}
+          {modeBadge.label}
         </span>
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-        <ReloadButton isLoading={isRefreshing} onRefresh={onRefresh} />
+        <SettingsButton onClick={onOpenSettings} />
       </div>
     </header>
   )

@@ -66,12 +66,18 @@ export function useRealtimeDashboard() {
       queryClient.setQueryData(['attendance-stats'], stats);
     }
 
+    function handleScanCheckin(payload) {
+      if (!payload || typeof payload !== 'object') return;
+      queryClient.setQueryData(['scan-latest'], payload);
+    }
+
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
     socket.on('connect_error', handleConnectError);
 
     socket.on('students:update', handleStudentsUpdate);
     socket.on('attendance:update', handleStatsUpdate);
+    socket.on('scan:checkin', handleScanCheckin);
     function handleDashboardUpdate(payload) {
       handleStudentsUpdate(payload);
       handleStatsUpdate(payload);
@@ -87,6 +93,7 @@ export function useRealtimeDashboard() {
       socket.off('connect_error', handleConnectError);
       socket.off('students:update', handleStudentsUpdate);
       socket.off('attendance:update', handleStatsUpdate);
+      socket.off('scan:checkin', handleScanCheckin);
       socket.off('dashboard:update', handleDashboardUpdate);
       socket.disconnect();
     };

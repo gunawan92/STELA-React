@@ -1,17 +1,19 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --brand-primary: #0f766e;
-  --brand-secondary: #f59e0b;
+  --brand-primary: #ae0002;
+  --brand-secondary: #efba31;
   --surface-bg: #f2f6f7;
   --surface-card: #ffffff;
   --surface-border: #d4dde2;
   --surface-text: #0f172a;
   --surface-soft-text: #4b5563;
   --surface-muted: #ebf0f3;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-family: 'Montserrat', sans-serif;
 }
 
 .dark {
@@ -37,6 +39,7 @@ body {
   margin: 0;
   background-color: var(--surface-bg);
   color: var(--surface-text);
+  font-family: 'Montserrat', sans-serif;
 }
 
 .ticker-wrap {
