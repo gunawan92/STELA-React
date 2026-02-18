@@ -44,7 +44,11 @@ function normalizeQrSerial(rawValue) {
     .replace(/\s+/g, '')
 }
 
-function ScanAttendancePanel({ student, cameraQuality = 'medium' }) {
+function ScanAttendancePanel({
+  student,
+  cameraQuality = 'medium',
+  scanDeviceId = 'DEV2026',
+}) {
   const queryClient = useQueryClient()
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
@@ -220,7 +224,7 @@ function ScanAttendancePanel({ student, cameraQuality = 'medium' }) {
 
         const checkinResult = await postScanCheckin({
           serial: qrValue,
-          device_id: 'DEV2026',
+          device_id: String(scanDeviceId || 'DEV2026').trim() || 'DEV2026',
           tap_time: new Date().toISOString(),
           deskripsi: 'absen_perangkat',
         })

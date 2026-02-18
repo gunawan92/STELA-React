@@ -2,12 +2,19 @@ import { getMockAttendanceStats } from '../mock/attendanceStatsMock';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
+function buildAttendanceStatsUrl() {
+  if (!API_BASE_URL) return null;
+  if (API_BASE_URL.endsWith('/api')) return `${API_BASE_URL}/attendance/statistics`;
+  return `${API_BASE_URL}/api/attendance/statistics`;
+}
+
 export async function fetchAttendanceStats() {
-  if (!API_BASE_URL) {
+  const url = buildAttendanceStatsUrl();
+  if (!url) {
     return getMockAttendanceStats();
   }
 
-  const response = await fetch(`${API_BASE_URL}/attendance/statistics`);
+  const response = await fetch(url);
 
   if (!response.ok) {
     throw new Error('Gagal mengambil statistik absensi dari API lokal.');

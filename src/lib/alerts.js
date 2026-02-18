@@ -5,7 +5,8 @@ export function showSuccessAlert(text) {
     icon: 'success',
     title: 'Berhasil',
     text,
-    timer: 1600,
+    timer: 4000,
+    timerProgressBar: true,
     showConfirmButton: false,
   });
 }
@@ -15,6 +16,9 @@ export function showErrorAlert(text) {
     icon: 'error',
     title: 'Terjadi Kesalahan',
     text,
+    timer: 4000,
+    timerProgressBar: true,
+    showConfirmButton: false,
   });
 }
 

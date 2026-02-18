@@ -77,6 +77,7 @@ export function useRealtimeDashboard() {
 
     socket.on('students:update', handleStudentsUpdate);
     socket.on('attendance:update', handleStatsUpdate);
+    socket.on('stats:update', handleStatsUpdate);
     socket.on('scan:checkin', handleScanCheckin);
     function handleDashboardUpdate(payload) {
       handleStudentsUpdate(payload);
@@ -93,6 +94,7 @@ export function useRealtimeDashboard() {
       socket.off('connect_error', handleConnectError);
       socket.off('students:update', handleStudentsUpdate);
       socket.off('attendance:update', handleStatsUpdate);
+      socket.off('stats:update', handleStatsUpdate);
       socket.off('scan:checkin', handleScanCheckin);
       socket.off('dashboard:update', handleDashboardUpdate);
       socket.disconnect();

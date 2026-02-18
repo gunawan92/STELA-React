@@ -25,9 +25,11 @@ const solidToneClass = {
 function getSolidValueClass(value) {
   const digitCount = String(value).replace(/\D/g, '').length
 
-  if (digitCount >= 5) return 'text-3xl'
-  if (digitCount === 4) return 'text-4xl'
-  return 'text-8xl'
+  if (digitCount >= 6) return 'text-2xl sm:text-3xl'
+  if (digitCount === 5) return 'text-3xl sm:text-4xl'
+  if (digitCount === 4) return 'text-4xl sm:text-5xl'
+  if (digitCount === 3) return 'text-5xl sm:text-6xl'
+  return 'text-6xl sm:text-7xl'
 }
 
 function StatsCard({ label, value, tone = 'primary', variant = 'default' }) {
@@ -43,7 +45,7 @@ function StatsCard({ label, value, tone = 'primary', variant = 'default' }) {
           {label}
         </p>
         <p
-          className={`tabular-nums ${valueClass} font-black leading-none text-white`}
+          className={`tabular-nums ${valueClass} max-w-full overflow-hidden text-ellipsis font-black leading-none tracking-tight text-white`}
         >
           {value}
         </p>
