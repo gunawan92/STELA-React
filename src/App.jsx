@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import DashboardHeader from './components/layout/DashboardHeader'
 import PageContainer from './components/layout/PageContainer'
-import ScanAttendancePanel from './components/scan/ScanAttendancePanel'
+import ScanAttendancePanel from './components/scan/ScanAttendance2D'
 import StatsGrid from './components/stats/StatsGrid'
 import StudentCard from './components/students/StudentCard'
 import StudentSkeleton from './components/students/StudentSkeleton'
@@ -181,7 +181,7 @@ function mapScanPayloadToStudent(payload) {
     name: payload.user_name || payload.serial || payload.iduser || 'Siswa',
     nis: payload.serial || payload.iduser || '-',
     classroom: payload.class_name || payload.idclass || '-',
-    photoUrl: null,
+    photoUrl: payload.photo_url || null,
     rfidGate: null,
     attendanceStatus: mapInfoToStatus(payload.info),
     attendanceLabel: payload.info || 'Hadir',
