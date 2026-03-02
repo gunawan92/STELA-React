@@ -48,6 +48,7 @@ function ScanAttendancePanel({
   student,
   cameraQuality = 'medium',
   scanDeviceId = 'DEV2026',
+  selectedSchoolId = '',
 }) {
   const queryClient = useQueryClient()
   const videoRef = useRef(null)
@@ -221,10 +222,15 @@ function ScanAttendancePanel({
 
         setScanState('processing')
         setScanMessage('QR terdeteksi, memproses...')
+        const resolvedDeviceId =
+          String(scanDeviceId || 'DEV2026').trim() || 'DEV2026'
 
         const checkinResult = await postScanCheckin({
           serial: qrValue,
-          device_id: String(scanDeviceId || 'DEV2026').trim() || 'DEV2026',
+          device_id: resolvedDeviceId,
+          operator: resolvedDeviceId,
+          school_id: selectedSchoolId || undefined,
+          idschool: selectedSchoolId || undefined,
           tap_time: new Date().toISOString(),
           deskripsi: 'absen_perangkat',
         })
@@ -260,7 +266,7 @@ function ScanAttendancePanel({
     return () => {
       clearInterval(intervalId)
     }
-  }, [cameraState, qrSupportState, queryClient])
+  }, [cameraState, qrSupportState, queryClient, scanDeviceId, selectedSchoolId])
 
   return (
     <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
@@ -286,9 +292,9 @@ function ScanAttendancePanel({
           <p
             className={`text-sm font-medium ${
               scanState === 'success'
-                ? 'text-emerald-700 dark:text-emerald-300'
+                ? 'text-green-700 dark:text-green-300'
                 : scanState === 'error'
-                  ? 'text-rose-700 dark:text-rose-300'
+                  ? 'text-red-700 dark:text-red-300'
                   : 'text-surface-soft'
             }`}
           >

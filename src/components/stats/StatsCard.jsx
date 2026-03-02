@@ -9,6 +9,11 @@ const toneStyle = {
     backgroundColor: 'rgba(245, 158, 11, 0.15)',
     color: '#f59e0b',
   },
+  info: {
+    borderColor: '#2563eb',
+    backgroundColor: 'rgba(37, 99, 235, 0.14)',
+    color: '#2563eb',
+  },
   danger: {
     borderColor: '#dc2626',
     backgroundColor: 'rgba(220, 38, 38, 0.12)',
@@ -19,6 +24,7 @@ const toneStyle = {
 const solidToneClass = {
   primary: 'bg-teal-700',
   secondary: 'bg-amber-500',
+  info: 'bg-blue-600',
   danger: 'bg-rose-600',
 }
 

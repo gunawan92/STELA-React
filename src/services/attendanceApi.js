@@ -22,8 +22,10 @@ export async function fetchAttendanceStats() {
 
   const payload = await response.json();
   return {
+    ontimeCount: payload.ontimeCount ?? payload.statistics?.ontimeCount ?? 0,
     lateCount: payload.lateCount ?? payload.statistics?.lateCount ?? 0,
     arrivedCount: payload.arrivedCount ?? payload.statistics?.arrivedCount ?? 0,
+    totalTapCount: payload.totalTapCount ?? payload.statistics?.totalTapCount ?? 0,
     notTapCount: payload.notTapCount ?? payload.statistics?.notTapCount ?? 0,
     updatedAt: payload.updatedAt ?? payload.statistics?.updatedAt ?? new Date().toISOString(),
   };

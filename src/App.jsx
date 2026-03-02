@@ -1,19 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import DashboardHeader from './components/layout/DashboardHeader'
 import PageContainer from './components/layout/PageContainer'
+import RfidAttendance6Slot from './components/rfid/rfidAttendance6slot'
 import ScanAttendancePanel from './components/scan/ScanAttendance2D'
 import StatsGrid from './components/stats/StatsGrid'
-import StudentCard from './components/students/StudentCard'
 import StudentSkeleton from './components/students/StudentSkeleton'
 import SettingsDrawer from './components/ui/SettingsDrawer'
 import { useAttendanceStats } from './hooks/useAttendanceStats'
 import { useInternetStatus } from './hooks/useInternetStatus'
 import { useRealtimeDashboard } from './hooks/useRealtimeDashboard'
-import { useScanLatest } from './hooks/useScanLatest'
 import { useSchools } from './hooks/useSchools'
 import { useStudents } from './hooks/useStudents'
 import { useTheme } from './hooks/useTheme'
-import { showErrorAlert } from './lib/alerts'
+import { showErrorAlert, showSuccessAlert } from './lib/alerts'
+import {
+  autoAssignRfidPorts,
+  fetchRfidPortState,
+} from './services/devicePortsApi'
+import { fetchLateConfig, updateLateConfig } from './services/lateConfigApi'
 import { buildSchoolLogoUrl } from './services/schoolApi'
 
 const RFID_SLOTS = Array.from({ length: 6 }, (_, index) => ({
@@ -24,7 +28,6 @@ const ACTIVE_MODE_STORAGE_KEY = 'stela-active-mode'
 const VALID_MODES = new Set(['rfid', 'scan'])
 const CAMERA_QUALITY_STORAGE_KEY = 'stela-camera-quality'
 const VALID_CAMERA_QUALITY = new Set(['low', 'medium', 'high'])
-const RFID_PORTS_STORAGE_KEY = 'stela-rfid-ports'
 const SCAN_DEVICE_ID_STORAGE_KEY = 'stela-scan-device-id'
 const SCHOOL_ID_STORAGE_KEY = 'stela-school-id'
 
@@ -57,42 +60,6 @@ function getStoredCameraQuality() {
 function setStoredCameraQuality(quality) {
   try {
     window.localStorage.setItem(CAMERA_QUALITY_STORAGE_KEY, quality)
-  } catch {
-    // ignore storage errors
-  }
-}
-
-function getDefaultRfidPorts() {
-  return RFID_SLOTS.reduce((accumulator, slot, index) => {
-    accumulator[slot.id] = `COM${index + 1}`
-    return accumulator
-  }, {})
-}
-
-function getStoredRfidPorts() {
-  try {
-    const saved = window.localStorage.getItem(RFID_PORTS_STORAGE_KEY)
-    if (!saved) return getDefaultRfidPorts()
-
-    const parsed = JSON.parse(saved)
-    const defaults = getDefaultRfidPorts()
-
-    return RFID_SLOTS.reduce((accumulator, slot) => {
-      const value = parsed?.[slot.id]
-      accumulator[slot.id] =
-        typeof value === 'string' && value.trim()
-          ? value.trim()
-          : defaults[slot.id]
-      return accumulator
-    }, {})
-  } catch {
-    return getDefaultRfidPorts()
-  }
-}
-
-function setStoredRfidPorts(ports) {
-  try {
-    window.localStorage.setItem(RFID_PORTS_STORAGE_KEY, JSON.stringify(ports))
   } catch {
     // ignore storage errors
   }
@@ -131,14 +98,6 @@ function setStoredSchoolId(schoolId) {
   }
 }
 
-const SCHOOL_ANNOUNCEMENTS = (
-  import.meta.env.VITE_SCHOOL_ANNOUNCEMENTS ||
-  'Selamat datang di sistem monitoring absen sekolah. | Jam masuk siswa pukul 07:00 WIB. | Tetap disiplin, tetap semangat belajar.'
-)
-  .split('|')
-  .map((item) => item.trim())
-  .filter(Boolean)
-
 function getTapOrderValue(student) {
   if (student.lastTapAt) {
     const timestamp = Date.parse(student.lastTapAt)
@@ -157,52 +116,62 @@ function getTapOrderValue(student) {
   return -1
 }
 
-function mapInfoToStatus(info) {
-  const normalized = String(info || '').toLowerCase()
-  if (normalized === 'terlambat') return 'TERLAMBAT'
-  if (normalized === 'hadir') return 'DATANG'
-  return 'DATANG'
-}
+function normalizeRfidSlot(value) {
+  const normalized = String(value || '')
+    .trim()
+    .toUpperCase()
+  if (!normalized) return null
 
-function normalizeScanDateTime(value) {
-  if (!value) return null
-  if (typeof value === 'string' && value.includes('T')) return value
-  if (typeof value === 'string' && value.includes(' ')) {
-    return value.replace(' ', 'T')
-  }
+  const withUnderscore = normalized.replace(/\s+/g, '_')
+  const slotMatch = withUnderscore.match(/^RFID_(\d+)$/)
+  if (slotMatch) return `RFID_${slotMatch[1]}`
+
+  if (/^\d+$/.test(withUnderscore)) return `RFID_${withUnderscore}`
   return null
 }
 
-function mapScanPayloadToStudent(payload) {
-  if (!payload) return null
+function getStudentRfidSlot(student) {
+  const slotCandidates = [
+    student?.rfidGate,
+    student?.rfid_gate,
+    student?.rfidSlot,
+    student?.rfid_slot,
+    student?.gate,
+    student?.gateId,
+    student?.gate_id,
+  ]
 
-  return {
-    id: payload.iduser || payload.serial || 'SCAN',
-    name: payload.user_name || payload.serial || payload.iduser || 'Siswa',
-    nis: payload.serial || payload.iduser || '-',
-    classroom: payload.class_name || payload.idclass || '-',
-    photoUrl: payload.photo_url || null,
-    rfidGate: null,
-    attendanceStatus: mapInfoToStatus(payload.info),
-    attendanceLabel: payload.info || 'Hadir',
-    lastCheckIn: payload.time || null,
-    lastTapAt: normalizeScanDateTime(payload.tanggal_waktu),
+  for (const candidate of slotCandidates) {
+    const slot = normalizeRfidSlot(candidate)
+    if (slot) return slot
   }
+
+  return null
 }
 
 function App() {
   const [activeMode, setActiveMode] = useState(getStoredActiveMode)
   const [cameraQuality, setCameraQuality] = useState(getStoredCameraQuality)
-  const [rfidPorts, setRfidPorts] = useState(getStoredRfidPorts)
   const [scanDeviceId, setScanDeviceId] = useState(getStoredScanDeviceId)
   const [selectedSchoolId, setSelectedSchoolId] = useState(getStoredSchoolId)
+  const [lateCutoffTime, setLateCutoffTime] = useState('07:00')
+  const [isSavingLateCutoff, setIsSavingLateCutoff] = useState(false)
+  const [isAutoAssigningPorts, setIsAutoAssigningPorts] = useState(false)
+  const [rfidPortState, setRfidPortState] = useState({
+    slots: RFID_SLOTS.map((slot, index) => ({
+      slot: slot.id,
+      set: index + 1,
+      com: null,
+    })),
+    availablePorts: [],
+    updatedAt: null,
+  })
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const studentsQuery = useStudents()
+  const studentsQuery = useStudents(selectedSchoolId)
   const statsQuery = useAttendanceStats()
-  const scanLatestQuery = useScanLatest()
   const schoolsQuery = useSchools()
   const { isOnline, pingMs, statusLabel } = useInternetStatus()
-  useRealtimeDashboard()
+  useRealtimeDashboard(selectedSchoolId)
   const { theme, toggleTheme } = useTheme()
 
   const lastErrorRef = useRef('')
@@ -221,6 +190,19 @@ function App() {
     return schools[0]
   }, [schools, selectedSchoolId])
 
+  const mappedRfidPorts = useMemo(() => {
+    const bySlot = {}
+    for (const slot of rfidPortState?.slots || []) {
+      const normalizedSlot = normalizeRfidSlot(slot?.slot)
+      if (!normalizedSlot) continue
+      bySlot[normalizedSlot] = String(slot?.com || '').trim() || '-'
+    }
+    for (const slot of RFID_SLOTS) {
+      if (!bySlot[slot.id]) bySlot[slot.id] = '-'
+    }
+    return bySlot
+  }, [rfidPortState?.slots])
+
   const latestStudentBySlot = useMemo(
     () =>
       RFID_SLOTS.map((slot) => {
@@ -228,7 +210,7 @@ function App() {
           students
             .filter(
               (student) =>
-                student.rfidGate === slot.id &&
+                getStudentRfidSlot(student) === slot.id &&
                 student.attendanceStatus !== 'BELUM_TAP'
             )
             .sort((a, b) => getTapOrderValue(b) - getTapOrderValue(a))[0] ||
@@ -237,33 +219,21 @@ function App() {
         return {
           ...slot,
           student: latestStudent,
-          configuredPort: rfidPorts[slot.id] || '-',
+          configuredPort: mappedRfidPorts[slot.id] || '-',
         }
       }),
-    [students, rfidPorts]
+    [mappedRfidPorts, students]
   )
-  const latestScannedStudent = useMemo(
-    () =>
-      students
-        .filter((student) => student.attendanceStatus !== 'BELUM_TAP')
-        .sort((a, b) => getTapOrderValue(b) - getTapOrderValue(a))[0] || null,
-    [students]
-  )
-  const liveScannedStudent = useMemo(
-    () => mapScanPayloadToStudent(scanLatestQuery.data),
-    [scanLatestQuery.data]
-  )
-  const displayedScannedStudent = liveScannedStudent
   const resolvedSchoolName =
-    selectedSchool?.name || import.meta.env.VITE_SCHOOL_NAME || 'SMK STELA INDONESIA'
+    selectedSchool?.name ||
+    import.meta.env.VITE_SCHOOL_NAME ||
+    'SMK STELA INDONESIA'
   const localSchoolLogoUrl = selectedSchool?.id
     ? buildSchoolLogoUrl(selectedSchool.id)
     : import.meta.env.VITE_SCHOOL_LOGO_URL || ''
-  const remoteAssetBaseUrl =
-    (import.meta.env.VITE_MITRA_ASSET_BASE_URL || 'https://mitra.stela.id').replace(
-      /\/+$/,
-      ''
-    )
+  const remoteAssetBaseUrl = (
+    import.meta.env.VITE_MITRA_ASSET_BASE_URL || 'https://mitra.stela.id'
+  ).replace(/\/+$/, '')
   const remoteSchoolLogoUrl = selectedSchool?.pathFile
     ? `${remoteAssetBaseUrl}/${String(selectedSchool.pathFile).replace(/^\/+/, '')}`
     : ''
@@ -273,9 +243,10 @@ function App() {
     if (!stats) return []
 
     return [
-      { label: 'Datang', value: stats.arrivedCount, tone: 'primary' },
-      { label: 'Terlambat', value: stats.lateCount, tone: 'secondary' },
-      { label: 'Tidak Absen', value: stats.notTapCount, tone: 'danger' },
+      { label: 'Murid Ontime', value: stats.ontimeCount, tone: 'primary' },
+      { label: 'Murid Terlambat', value: stats.lateCount, tone: 'secondary' },
+      { label: 'Sudah Taping', value: stats.totalTapCount, tone: 'info' },
+      { label: 'Belum Taping', value: stats.notTapCount, tone: 'danger' },
     ]
   }, [stats])
 
@@ -299,10 +270,6 @@ function App() {
   }, [cameraQuality])
 
   useEffect(() => {
-    setStoredRfidPorts(rfidPorts)
-  }, [rfidPorts])
-
-  useEffect(() => {
     setStoredScanDeviceId(scanDeviceId)
   }, [scanDeviceId])
 
@@ -323,11 +290,108 @@ function App() {
     setStoredSchoolId(selectedSchoolId)
   }, [selectedSchoolId])
 
-  function handleChangeRfidPort(slotId, value) {
-    setRfidPorts((previous) => ({
-      ...previous,
-      [slotId]: value,
-    }))
+  const refreshRfidPorts = useCallback(async () => {
+    try {
+      const nextState = await fetchRfidPortState()
+      setRfidPortState({
+        slots: Array.isArray(nextState?.slots) ? nextState.slots : [],
+        availablePorts: Array.isArray(nextState?.availablePorts)
+          ? nextState.availablePorts
+          : [],
+        updatedAt: nextState?.updatedAt || new Date().toISOString(),
+      })
+    } catch (error) {
+      showErrorAlert(
+        error?.message || 'Gagal membaca mapping port RFID backend.'
+      )
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshRfidPorts()
+  }, [refreshRfidPorts])
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      void refreshRfidPorts()
+    }, 15000)
+
+    return () => clearInterval(intervalId)
+  }, [refreshRfidPorts])
+
+  useEffect(() => {
+    let isActive = true
+
+    async function loadLateCutoff() {
+      if (!selectedSchoolId) {
+        if (isActive) setLateCutoffTime('07:00')
+        return
+      }
+
+      try {
+        const result = await fetchLateConfig(selectedSchoolId)
+        const rawTime = String(result?.late_cutoff_time || '07:00:00')
+        const uiTime = rawTime.slice(0, 5)
+        if (isActive) setLateCutoffTime(uiTime)
+      } catch {
+        if (isActive) setLateCutoffTime('07:00')
+      }
+    }
+
+    void loadLateCutoff()
+
+    return () => {
+      isActive = false
+    }
+  }, [selectedSchoolId])
+
+  async function handleSaveLateCutoff() {
+    if (!selectedSchoolId) {
+      showErrorAlert('Pilih sekolah terlebih dahulu.')
+      return
+    }
+
+    const normalized = String(lateCutoffTime || '').trim()
+    if (!/^\d{2}:\d{2}$/.test(normalized)) {
+      showErrorAlert('Format jam batas telat harus HH:mm.')
+      return
+    }
+
+    setIsSavingLateCutoff(true)
+    try {
+      const result = await updateLateConfig({
+        schoolId: selectedSchoolId,
+        lateCutoffTime: `${normalized}:00`,
+      })
+      const uiTime = String(
+        result?.late_cutoff_time || `${normalized}:00`
+      ).slice(0, 5)
+      setLateCutoffTime(uiTime)
+      showSuccessAlert('Batas telat global berhasil disimpan.')
+    } catch (error) {
+      showErrorAlert(error?.message || 'Gagal menyimpan batas telat.')
+    } finally {
+      setIsSavingLateCutoff(false)
+    }
+  }
+
+  async function handleAutoAssignPorts() {
+    setIsAutoAssigningPorts(true)
+    try {
+      const nextState = await autoAssignRfidPorts()
+      setRfidPortState({
+        slots: Array.isArray(nextState?.slots) ? nextState.slots : [],
+        availablePorts: Array.isArray(nextState?.availablePorts)
+          ? nextState.availablePorts
+          : [],
+        updatedAt: nextState?.updatedAt || new Date().toISOString(),
+      })
+      showSuccessAlert('Auto assign port COM berhasil.')
+    } catch (error) {
+      showErrorAlert(error?.message || 'Gagal auto assign port RFID.')
+    } finally {
+      setIsAutoAssigningPorts(false)
+    }
   }
 
   useEffect(() => {
@@ -353,117 +417,40 @@ function App() {
 
       <section className="grid items-start gap-4 lg:grid-cols-[minmax(0,3.65fr)_minmax(13.5rem,0.62fr)]">
         <div className="space-y-4">
-          {/* <div className="inline-flex w-fit rounded-lg border border-surface-border bg-surface-card p-1">
-            <button
-              type="button"
-              onClick={() => setActiveMode('rfid')}
-              className={`rounded-md px-4 py-2 text-sm font-semibold transition ${
-                activeMode === 'rfid'
-                  ? 'bg-brand-primary text-white'
-                  : 'text-surface-soft hover:bg-surface-muted'
-              }`}
-            >
-              Mode RFID
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveMode('scan')}
-              className={`rounded-md px-4 py-2 text-sm font-semibold transition ${
-                activeMode === 'scan'
-                  ? 'bg-brand-primary text-white'
-                  : 'text-surface-soft hover:bg-surface-muted'
-              }`}
-            >
-              Mode Scan
-            </button>
-          </div> */}
           <div>
-            <p className="text-sm text-surface-soft">
+            {/* <p className="text-sm text-surface-soft">
               {activeMode === 'rfid'
                 ? 'Siswa tap kartu, respon muncul realtime di panel RFID masing-masing. Mapping port per RFID dapat dilihat di panel dan di Settings.'
                 : 'Scan QR Kartu dari kamera, nama siswa akan tampil setelah absen.'}
-            </p>
+            </p> */}
           </div>
 
           {isLoading ? (
             <StudentSkeleton count={6} columns={3} />
           ) : activeMode === 'scan' ? (
             <ScanAttendancePanel
-              student={displayedScannedStudent}
-              cameraQuality={cameraQuality}
               scanDeviceId={scanDeviceId}
+              selectedSchoolId={selectedSchoolId}
+              rfidPorts={mappedRfidPorts}
             />
           ) : (
-            <section className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {latestStudentBySlot.map((slot) => (
-                <article
-                  key={slot.id}
-                  className="min-h-[18rem] rounded-xl border border-surface-border bg-surface-card p-4 shadow-sm"
-                >
-                  <div className="mb-3 flex items-center justify-between gap-2">
-                    <div>
-                      <h3 className="text-lg font-bold text-surface-text">
-                        {slot.label}
-                      </h3>
-                      <p className="text-xs font-medium text-surface-soft">
-                        Port: {slot.configuredPort}
-                      </p>
-                    </div>
-                    <span
-                      className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                        slot.student
-                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'
-                          : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
-                      }`}
-                    >
-                      {slot.student ? 'Selesai Tap' : 'Menunggu Tap'}
-                    </span>
-                  </div>
-
-                  {slot.student ? (
-                    <div className="h-[13.25rem] overflow-hidden rounded-lg">
-                      <StudentCard student={slot.student} embedded />
-                    </div>
-                  ) : (
-                    <div className="flex h-[13.25rem] items-center justify-center rounded-lg border border-dashed border-surface-border bg-surface-muted/60 text-center">
-                      <div>
-                        <p className="text-base font-semibold text-surface-text">
-                          Belum ada tap kartu
-                        </p>
-                        <p className="mt-1 text-sm text-surface-soft">
-                          Silakan siswa tap di {slot.label}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </article>
-              ))}
-            </section>
+            <RfidAttendance6Slot latestStudentBySlot={latestStudentBySlot} />
           )}
         </div>
 
-        <aside className="space-y-3 rounded-2xl border border-surface-border bg-surface-muted/40 p-4 mt-6 lg:mt-0">
+        <aside className="space-y-3 rounded-2xl border border-surface-border bg-surface-muted/40 p-4 mt-6 lg:mt-4">
           <div>
             <h2 className="text-xl font-bold text-surface-text">
               Statistik Harian
             </h2>
-            <p className="text-sm text-surface-soft">
+            {/* <p className="text-sm text-surface-soft">
               Menggunakan data realtime.
-            </p>
+            </p> */}
           </div>
 
           <StatsGrid cards={statCards} columns={1} variant="solid" />
-
-          {stats?.updatedAt ? (
-            <p className="text-xs text-surface-soft">
-              Update terakhir:{' '}
-              {new Date(stats.updatedAt).toLocaleString('id-ID')}
-            </p>
-          ) : null}
         </aside>
       </section>
-
-      {/* <AnnouncementTicker items={SCHOOL_ANNOUNCEMENTS} /> */}
 
       <SettingsDrawer
         isOpen={isSettingsOpen}
@@ -472,13 +459,20 @@ function App() {
         onChangeMode={setActiveMode}
         cameraQuality={cameraQuality}
         onChangeCameraQuality={setCameraQuality}
-        rfidPorts={rfidPorts}
-        onChangeRfidPort={handleChangeRfidPort}
+        rfidPorts={mappedRfidPorts}
+        availableRfidPorts={rfidPortState.availablePorts}
+        onRefreshRfidPorts={refreshRfidPorts}
+        onAutoAssignRfidPorts={handleAutoAssignPorts}
+        isAutoAssigningRfidPorts={isAutoAssigningPorts}
         scanDeviceId={scanDeviceId}
         onChangeScanDeviceId={setScanDeviceId}
         schools={schools}
         selectedSchoolId={selectedSchool?.id || ''}
         onChangeSelectedSchoolId={setSelectedSchoolId}
+        lateCutoffTime={lateCutoffTime}
+        onChangeLateCutoffTime={setLateCutoffTime}
+        onSaveLateCutoff={handleSaveLateCutoff}
+        isSavingLateCutoff={isSavingLateCutoff}
       />
 
       <footer className="flex flex-col gap-2 rounded-xl border border-surface-border bg-surface-card px-3 py-2 sm:flex-row sm:items-center sm:justify-between">

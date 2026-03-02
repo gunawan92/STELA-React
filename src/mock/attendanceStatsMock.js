@@ -11,11 +11,16 @@ export function getMockAttendanceStats() {
       return accumulator;
     },
     {
+      ontimeCount: 0,
       lateCount: 0,
       arrivedCount: 0,
+      totalTapCount: 0,
       notTapCount: 0,
     },
   );
+
+  stats.ontimeCount = Math.max(0, stats.arrivedCount - stats.lateCount);
+  stats.totalTapCount = stats.arrivedCount;
 
   return {
     ...stats,

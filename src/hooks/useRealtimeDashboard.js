@@ -28,7 +28,7 @@ function normalizeStatsPayload(payload) {
   return null;
 }
 
-export function useRealtimeDashboard() {
+export function useRealtimeDashboard(selectedSchoolId = '') {
   const queryClient = useQueryClient();
   const [connectionStatus, setConnectionStatus] = useState(
     import.meta.env.VITE_WS_URL ? 'connecting' : 'mock',
@@ -57,7 +57,7 @@ export function useRealtimeDashboard() {
     function handleStudentsUpdate(payload) {
       const students = normalizeStudentsPayload(payload);
       if (!students) return;
-      queryClient.setQueryData(['students'], students);
+      queryClient.setQueryData(['students', selectedSchoolId || ''], students);
     }
 
     function handleStatsUpdate(payload) {
@@ -68,6 +68,13 @@ export function useRealtimeDashboard() {
 
     function handleScanCheckin(payload) {
       if (!payload || typeof payload !== 'object') return;
+      if (
+        selectedSchoolId &&
+        payload.idschool &&
+        String(payload.idschool) !== String(selectedSchoolId)
+      ) {
+        return;
+      }
       queryClient.setQueryData(['scan-latest'], payload);
     }
 
@@ -99,7 +106,7 @@ export function useRealtimeDashboard() {
       socket.off('dashboard:update', handleDashboardUpdate);
       socket.disconnect();
     };
-  }, [queryClient]);
+  }, [queryClient, selectedSchoolId]);
 
   return { connectionStatus };
 }

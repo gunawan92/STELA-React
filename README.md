@@ -52,9 +52,25 @@ VITE_SCHOOL_ANNOUNCEMENTS=Selamat datang.|Jam masuk siswa pukul 07:00 WIB.|Tetap
 
 - `GET {VITE_API_BASE_URL}/students`
 - `GET {VITE_API_BASE_URL}/attendance/statistics`
+- `GET {VITE_API_BASE_URL}/schools`
+- `GET {VITE_API_BASE_URL}/schools/:id/logo`
+- `GET {VITE_API_BASE_URL}/device/ports`
+- `POST {VITE_API_BASE_URL}/device/ports/auto-assign`
+- `GET {VITE_API_BASE_URL}/device/late-config?schoolId=:id`
+- `PUT {VITE_API_BASE_URL}/device/late-config`
+- `POST {VITE_API_BASE_URL}/scan/checkin`
 
 ## Event Socket.IO
 
 - `students:update`
 - `attendance:update`
 - `dashboard:update`
+- `stats:update`
+- `scan`
+- `scan:raw`
+- `scan:checkin`
+
+## Dokumentasi Frontend
+
+- Lihat detail implementasi terbaru (fitur, pending/stuck, endpoint summary) di:
+  - `docs/FRONTEND_INTEGRATION_NOTES.md`

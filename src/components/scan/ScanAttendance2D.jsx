@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { postScanCheckin } from '../../services/scanApi'
 import { getSocketClient } from '../../services/socketClient'
 
+const MIN_SCAN_INTERVAL_MS = 2500
+
 function formatAttendanceDate(isoDate) {
   if (!isoDate) return '-'
   const date = new Date(isoDate)
@@ -19,107 +21,326 @@ function getInitials(name = '') {
     .join('')
 }
 
-function normalizeScanSerial(payload) {
-  if (!payload) return ''
-  if (typeof payload === 'string') return payload.trim()
-  if (typeof payload.serial === 'string') return payload.serial.trim()
-  if (typeof payload.code === 'string') return payload.code.trim()
-  return ''
+function normalizeComPort(value) {
+  const raw = String(value || '')
+    .trim()
+    .toUpperCase()
+  return raw || null
 }
 
-function ScanAttendancePanel({ student, scanDeviceId = 'DEV2026' }) {
+function sortSlotId(a, b) {
+  const aMatch = String(a).match(/(\d+)/)
+  const bMatch = String(b).match(/(\d+)/)
+  if (aMatch && bMatch) return Number(aMatch[1]) - Number(bMatch[1])
+  return String(a).localeCompare(String(b))
+}
+
+function getSlotNumber(slotId) {
+  const match = String(slotId || '').match(/(\d+)/)
+  if (!match) return null
+  const value = Number(match[1])
+  return Number.isFinite(value) ? value : null
+}
+
+function formatScannerName(slotId) {
+  const slotNumber = getSlotNumber(slotId)
+  if (!slotNumber) return 'Scanner'
+  return `Scanner ${slotNumber}`
+}
+
+function getPanelKeyBySlotId(slotId) {
+  const slotNumber = getSlotNumber(slotId)
+  if (!slotNumber) return 'A'
+  return slotNumber % 2 === 0 ? 'A' : 'B'
+}
+
+function mapInfoToStatus(info) {
+  const normalized = String(info || '').toLowerCase()
+  if (normalized === 'terlambat') return 'TERLAMBAT'
+  if (normalized === 'hadir') return 'DATANG'
+  return 'DATANG'
+}
+
+function normalizeScanDateTime(value) {
+  if (!value) return null
+  if (typeof value === 'string' && value.includes('T')) return value
+  if (typeof value === 'string' && value.includes(' ')) {
+    return value.replace(' ', 'T')
+  }
+  return null
+}
+
+function normalizeScanPayload(payload) {
+  if (!payload) return null
+  if (typeof payload === 'string') {
+    const serial = payload.trim()
+    return serial
+      ? {
+          serial,
+          rfidPort: null,
+        }
+      : null
+  }
+
+  const serial = String(
+    payload.serial || payload.iduser || payload.code || ''
+  ).trim()
+  if (!serial) return null
+
+  return {
+    serial,
+    rfidPort: normalizeComPort(payload.rfid_port),
+  }
+}
+
+function mapCheckinPayloadToStudent(payload) {
+  if (!payload) return null
+
+  return {
+    id: payload.iduser || payload.serial || 'SCAN',
+    name: payload.user_name || payload.serial || payload.iduser || 'Siswa',
+    nis: payload.serial || payload.iduser || '-',
+    classroom: payload.class_name || payload.idclass || '-',
+    photoUrl: payload.photo_url || null,
+    attendanceStatus: mapInfoToStatus(payload.info),
+    attendanceLabel: payload.info || 'Hadir',
+    lastCheckIn: payload.time || null,
+    lastTapAt: normalizeScanDateTime(payload.tanggal_waktu),
+  }
+}
+
+function isTruthyFlag(value) {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value > 0
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+  return ['1', 'true', 'yes', 'y', 'in'].includes(normalized)
+}
+
+function resolveTapLabel(payload) {
+  const tapLabel = String(payload?.tap_label || payload?.tapLabel || '')
+    .trim()
+    .toLowerCase()
+  if (tapLabel.includes('pulang')) return 'Tap Pulang'
+  if (tapLabel.includes('masuk')) return 'Tap Masuk'
+
+  const tapMode = String(payload?.tap_mode || payload?.tapMode || '')
+    .trim()
+    .toLowerCase()
+  if (tapMode === 'pulang' || tapMode === 'out') return 'Tap Pulang'
+  if (tapMode === 'masuk' || tapMode === 'in') return 'Tap Masuk'
+
+  const inFlags = [payload?.status_in, payload?.has_in, payload?.in_exists]
+
+  const outFlags = [payload?.status_out, payload?.has_out, payload?.out_exists]
+
+  const statusHints = [
+    payload?.status,
+    payload?.log_status,
+    payload?.aro_status,
+  ]
+    .map((value) =>
+      String(value || '')
+        .trim()
+        .toLowerCase()
+    )
+    .filter(Boolean)
+
+  const hasInFromQuery =
+    inFlags.some((value) => isTruthyFlag(value)) ||
+    statusHints.some((value) => value === 'in' || value.includes('status in'))
+  const hasOutFromQuery =
+    outFlags.some((value) => isTruthyFlag(value)) || statusHints.includes('out')
+
+  // Rule bisnis dari query aro_log: jika ada jejak IN, labelkan Tap Pulang.
+  if (hasInFromQuery) {
+    return 'Tap Pulang'
+  }
+
+  if (hasOutFromQuery) {
+    return 'Tap Pulang'
+  }
+
+  return 'Tap Masuk'
+}
+
+function createInitialPanelState(key) {
+  return {
+    key,
+    student: null,
+    scanState: 'idle',
+    message: 'Menunggu scan...',
+    tapLabel: null,
+    lastSlotId: null,
+    lastPort: null,
+  }
+}
+
+function formatScannerList(slotIds) {
+  if (!slotIds.length) return '-'
+  return slotIds.map((slotId) => formatScannerName(slotId)).join(', ')
+}
+
+function ScanAttendancePanel({
+  scanDeviceId = '',
+  selectedSchoolId = '',
+  rfidPorts = {},
+}) {
   const queryClient = useQueryClient()
   const bufferRef = useRef('')
   const lastKeyTimeRef = useRef(0)
-  const lastScanAtRef = useRef(0)
+  const lastScanAtBySlotRef = useRef(new Map())
 
-  const [scanMessage, setScanMessage] = useState(
-    'Siap menerima scan barcode...'
+  const [panelState, setPanelState] = useState({
+    A: createInitialPanelState('A'),
+    B: createInitialPanelState('B'),
+  })
+  const [imgErrorByPanel, setImgErrorByPanel] = useState({
+    A: false,
+    B: false,
+  })
+
+  const activeSlots = useMemo(() => {
+    return Object.entries(rfidPorts || {})
+      .map(([slotId, port]) => ({
+        slotId,
+        port: normalizeComPort(port),
+      }))
+      .filter((item) => Boolean(item.slotId && item.port && item.port !== '-'))
+      .sort((a, b) => sortSlotId(a.slotId, b.slotId))
+  }, [rfidPorts])
+
+  const portToSlotMap = useMemo(() => {
+    const map = new Map()
+    for (const slot of activeSlots) {
+      map.set(slot.port, slot.slotId)
+    }
+    return map
+  }, [activeSlots])
+
+  const groupedSlots = useMemo(() => {
+    const grouped = { A: [], B: [] }
+    for (const slot of activeSlots) {
+      const panelKey = getPanelKeyBySlotId(slot.slotId)
+      grouped[panelKey].push(slot)
+    }
+    return grouped
+  }, [activeSlots])
+
+  const resolveSlotId = useCallback(
+    (rfidPort) => {
+      const normalizedPort = normalizeComPort(rfidPort)
+      if (normalizedPort && portToSlotMap.has(normalizedPort)) {
+        return portToSlotMap.get(normalizedPort)
+      }
+      return activeSlots[0]?.slotId || null
+    },
+    [activeSlots, portToSlotMap]
   )
-  const [scanState, setScanState] = useState('idle')
-  const [imgError, setImgError] = useState(false)
 
-  const attendanceTime = student?.lastCheckIn || '-'
-  const attendanceDate = formatAttendanceDate(student?.lastTapAt)
-  const attendanceStatus = student ? 'Berhasil' : 'Menunggu Scan'
-  const initials = useMemo(
-    () => getInitials(student?.name || ''),
-    [student?.name]
-  )
-
-  useEffect(() => {
-    setImgError(false)
-  }, [student?.photoUrl, student?.id])
+  const updatePanel = useCallback((panelKey, updater) => {
+    setPanelState((prev) => ({
+      ...prev,
+      [panelKey]: updater(prev[panelKey] || createInitialPanelState(panelKey)),
+    }))
+  }, [])
 
   const processScan = useCallback(
-    async (rawSerial) => {
+    async ({ serial: rawSerial, rfidPort }) => {
       const serial = String(rawSerial || '').trim()
       if (!serial) return
 
+      const slotId = resolveSlotId(rfidPort)
+      if (!slotId) return
+
+      const panelKey = getPanelKeyBySlotId(slotId)
       const now = Date.now()
+      const lastScanAt = lastScanAtBySlotRef.current.get(slotId) || 0
+      if (now - lastScanAt < MIN_SCAN_INTERVAL_MS) return
+      lastScanAtBySlotRef.current.set(slotId, now)
 
-      // Anti double scan 2.5 detik untuk semua sumber scan
-      if (now - lastScanAtRef.current < 2500) {
-        return
-      }
+      const portValue =
+        normalizeComPort(rfidPort) ||
+        activeSlots.find((slot) => slot.slotId === slotId)?.port ||
+        null
+      const resolvedDeviceId = String(scanDeviceId || '').trim()
 
-      lastScanAtRef.current = now
+      updatePanel(panelKey, (current) => ({
+        ...current,
+        scanState: 'processing',
+        message: `Memproses scan ${serial}...`,
+        lastSlotId: slotId,
+        lastPort: portValue,
+      }))
 
       try {
-        setScanState('processing')
-        setScanMessage('Barcode terdeteksi, memproses...')
-
         const result = await postScanCheckin({
           serial,
-          device_id: String(scanDeviceId).trim() || 'DEV2026',
+          device_id: resolvedDeviceId,
+          operator: resolvedDeviceId,
+          school_id: selectedSchoolId || undefined,
+          idschool: selectedSchoolId || undefined,
           tap_time: new Date().toISOString(),
-          deskripsi: 'absen_perangkat_usb',
+          rfid_port: portValue || undefined,
+          deskripsi: 'absen_perangkat',
         })
 
         queryClient.setQueryData(['scan-latest'], result)
 
-        setScanState('success')
-        setScanMessage(
-          `Berhasil: ${result.user_name || result.serial || result.iduser}`
-        )
+        updatePanel(panelKey, (current) => ({
+          ...current,
+          scanState: 'success',
+          student: mapCheckinPayloadToStudent(result),
+          tapLabel: resolveTapLabel(result),
+          message: `Berhasil: ${result.user_name || result.serial || result.iduser}`,
+          lastSlotId: slotId,
+          lastPort: result.rfid_port || portValue,
+        }))
       } catch (error) {
         const message = String(error?.message || '').toLowerCase()
+        let readableMessage = 'Gagal memproses scan.'
 
         if (message.includes('tidak ditemukan')) {
-          setScanState('error')
-          setScanMessage('Barcode tidak terdaftar.')
+          readableMessage = 'Barcode tidak terdaftar.'
         } else if (message.includes('network') || message.includes('cors')) {
-          setScanState('error')
-          setScanMessage('Koneksi ke backend gagal.')
-        } else {
-          setScanState('error')
-          setScanMessage('Gagal memproses scan.')
+          readableMessage = 'Koneksi ke backend gagal.'
         }
+
+        updatePanel(panelKey, (current) => ({
+          ...current,
+          scanState: 'error',
+          message: readableMessage,
+          lastSlotId: slotId,
+          lastPort: portValue,
+        }))
       }
     },
-    [queryClient, scanDeviceId]
+    [
+      activeSlots,
+      queryClient,
+      resolveSlotId,
+      scanDeviceId,
+      selectedSchoolId,
+      updatePanel,
+    ]
   )
 
   useEffect(() => {
     const handleKeyDown = async (e) => {
       const now = Date.now()
-
-      // Reset buffer kalau jeda terlalu lama (manual typing)
       if (now - lastKeyTimeRef.current > 100) {
         bufferRef.current = ''
       }
 
       if (e.key === 'Enter') {
         const serial = bufferRef.current.trim()
-
         if (!serial) return
         bufferRef.current = ''
-        await processScan(serial)
-
+        await processScan({ serial, rfidPort: null })
         return
       }
 
-      // Tambahkan karakter ke buffer
       if (e.key.length === 1) {
         bufferRef.current += e.key
       }
@@ -135,122 +356,220 @@ function ScanAttendancePanel({ student, scanDeviceId = 'DEV2026' }) {
     const socket = getSocketClient()
     if (!socket) return
 
-    const handleSocketScan = (payload) => {
-      const serial = normalizeScanSerial(payload)
-      if (!serial) return
-      processScan(serial)
+    const handleSocketRawScan = (payload) => {
+      const normalized = normalizeScanPayload(payload)
+      if (!normalized) return
+      void processScan(normalized)
     }
 
-    socket.on('scan', handleSocketScan)
-    socket.on('scan:checkin', handleSocketScan)
+    const handleSocketCheckin = (payload) => {
+      if (!payload || typeof payload !== 'object') return
+      if (
+        selectedSchoolId &&
+        payload.idschool &&
+        String(payload.idschool) !== String(selectedSchoolId)
+      ) {
+        return
+      }
+
+      const slotId = resolveSlotId(payload.rfid_port)
+      if (!slotId) return
+      const panelKey = getPanelKeyBySlotId(slotId)
+
+      updatePanel(panelKey, (current) => ({
+        ...current,
+        scanState: 'success',
+        student: mapCheckinPayloadToStudent(payload),
+        tapLabel: resolveTapLabel(payload),
+        message: `Berhasil: ${payload.user_name || payload.serial || payload.iduser}`,
+        lastSlotId: slotId,
+        lastPort: payload.rfid_port || current.lastPort,
+      }))
+    }
+
+    socket.on('scan', handleSocketRawScan)
+    socket.on('scan:raw', handleSocketRawScan)
+    socket.on('scan:checkin', handleSocketCheckin)
     socket.connect()
 
     return () => {
-      socket.off('scan', handleSocketScan)
-      socket.off('scan:checkin', handleSocketScan)
+      socket.off('scan', handleSocketRawScan)
+      socket.off('scan:raw', handleSocketRawScan)
+      socket.off('scan:checkin', handleSocketCheckin)
     }
-  }, [processScan])
-  
+  }, [processScan, resolveSlotId, selectedSchoolId, updatePanel])
+
+  const panelConfigs = [
+    {
+      key: 'A',
+      title: 'Tampilan A',
+      description: `Scanner: ${formatScannerList(groupedSlots.A.map((item) => item.slotId))}`,
+      emptyText: 'Menunggu scan dari Scanner 2/4/6',
+    },
+    {
+      key: 'B',
+      title: 'Tampilan B',
+      description: `Scanner: ${formatScannerList(groupedSlots.B.map((item) => item.slotId))}`,
+      emptyText: 'Menunggu scan dari Scanner 1/3/5',
+    },
+  ]
+
+  useEffect(() => {
+    setImgErrorByPanel((prev) => ({
+      ...prev,
+      A: false,
+    }))
+  }, [panelState.A?.student?.id, panelState.A?.student?.photoUrl])
+
+  useEffect(() => {
+    setImgErrorByPanel((prev) => ({
+      ...prev,
+      B: false,
+    }))
+  }, [panelState.B?.student?.id, panelState.B?.student?.photoUrl])
+
+  function setPanelImgError(panelKey, value) {
+    setImgErrorByPanel((prev) => ({
+      ...prev,
+      [panelKey]: value,
+    }))
+  }
+
   return (
-    <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-      <article className="rounded-xl border border-surface-border bg-surface-card p-4 shadow-sm">
-        <div className="flex h-[420px] items-center justify-center rounded-lg border border-dashed border-surface-border bg-surface-muted">
-          <div className="text-center">
-            <p className="text-xl font-semibold text-surface-text">
-              Siap menerima scan barcode
-            </p>
-            <p className="mt-2 text-sm text-surface-soft">Scanner USB aktif</p>
-          </div>
-        </div>
+    <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      {panelConfigs.map((config) => {
+        const panel =
+          panelState[config.key] || createInitialPanelState(config.key)
+        const student = panel.student
+        const attendanceTime = student?.lastCheckIn || '-'
+        const attendanceDate = formatAttendanceDate(student?.lastTapAt)
+        const attendanceStatus =
+          panel.scanState === 'success' && student
+            ? `Berhasil - ${panel.tapLabel || 'Tap Masuk'}`
+            : 'Menunggu Scan'
+        const initials = getInitials(student?.name || '')
+        const imgError = Boolean(imgErrorByPanel[config.key])
+        const scannerStatus =
+          panel.scanState === 'error'
+            ? 'Scanner bermasalah'
+            : panel.scanState === 'processing'
+              ? 'Menyiapkan scanner'
+              : 'Scanner aktif'
 
-        <div className="mt-3 rounded-lg border border-surface-border bg-surface-muted/70 px-3 py-2">
-          <p
-            className={`text-sm font-medium ${
-              scanState === 'success'
-                ? 'text-emerald-700 dark:text-emerald-300'
-                : scanState === 'error'
-                  ? 'text-rose-700 dark:text-rose-300'
-                  : 'text-surface-soft'
-            }`}
-          >
-            {scanMessage}
-          </p>
-        </div>
-      </article>
+        return (
+          <section key={config.key} className="space-y-2">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-bold text-surface-text">
+                  {config.title}
+                </h3>
+                <p className="text-xs font-medium text-surface-soft">
+                  {config.description}
+                </p>
+              </div>
+              <span
+                className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                  panel.scanState === 'success'
+                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'
+                    : panel.scanState === 'error'
+                      ? 'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300'
+                      : panel.scanState === 'processing'
+                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'
+                        : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
+                }`}
+              >
+                {panel.scanState === 'success'
+                  ? 'Berhasil'
+                  : panel.scanState === 'error'
+                    ? 'Gagal'
+                    : panel.scanState === 'processing'
+                      ? 'Memproses'
+                      : 'Menunggu'}
+              </span>
+            </div>
 
-      <article className="space-y-4 rounded-xl border border-surface-border bg-surface-card p-4 shadow-sm">
-        <div className="rounded-xl border border-surface-border bg-surface-card px-4 py-3 shadow-sm">
-          <p className="text-xs font-semibold text-brand-primary">Nama</p>
-          <p className="text-3xl font-bold leading-tight text-surface-text">
-            {student?.name || '-'}
-          </p>
-        </div>
+            <article className="space-y-4 rounded-xl border border-surface-border bg-surface-card p-4 shadow-sm">
+              <div className="rounded-xl border border-surface-border bg-surface-card px-4 py-3 shadow-sm">
+                <p className="text-xs font-semibold text-brand-primary">Nama</p>
+                <p className="text-5xl font-bold leading-tight text-surface-text">
+                  {student?.name || '-'}
+                </p>
+              </div>
 
-        <div className="rounded-xl border border-surface-border bg-surface-card p-3 shadow-sm">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-[13rem_minmax(0,1fr)] sm:items-start">
-            <div className="w-full min-w-52 overflow-hidden rounded-lg border border-surface-border bg-surface-muted">
-              {!imgError && student?.photoUrl ? (
-                <img
-                  src={student.photoUrl}
-                  alt={student.name}
-                  onError={() => setImgError(true)}
-                  className="aspect-[3/4] w-full object-cover"
-                />
-              ) : (
-                <div className="flex aspect-[3/4] w-full items-center justify-center text-4xl font-bold text-surface-soft">
-                  {initials || 'S'}
+              <div className="rounded-xl border border-surface-border bg-surface-card p-3 shadow-sm">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[13rem_minmax(0,1fr)] sm:items-start">
+                  <div className="w-full min-w-52 overflow-hidden rounded-lg border border-surface-border bg-surface-muted">
+                    {!imgError && student?.photoUrl ? (
+                      <img
+                        src={student.photoUrl}
+                        alt={student.name}
+                        onError={() => setPanelImgError(config.key, true)}
+                        className="aspect-[3/4] w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex aspect-[3/4] w-full items-center justify-center text-4xl font-bold text-surface-soft">
+                        {initials || 'S'}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 space-y-4">
+                    <div className="rounded-lg border border-surface-border bg-surface-muted px-3 py-2">
+                      <p className="text-xs font-semibold text-brand-primary">
+                        Kelas
+                      </p>
+                      <p className="text-2xl font-bold leading-tight text-surface-text">
+                        {student?.classroom || '-'}
+                      </p>
+                    </div>
+
+                    <div className="rounded-lg border border-surface-border bg-surface-muted px-3 py-2">
+                      <p className="text-xs font-semibold text-brand-primary">
+                        Jam
+                      </p>
+                      <p className="text-2xl font-bold leading-tight text-surface-text">
+                        {attendanceTime}
+                      </p>
+                    </div>
+
+                    <div className="rounded-lg border border-surface-border bg-surface-muted px-3 py-2">
+                      <p className="text-xs font-semibold text-brand-primary">
+                        Tanggal
+                      </p>
+                      <p className="text-2xl font-bold leading-tight text-surface-text">
+                        {attendanceDate}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-              )}
-            </div>
-
-            <div className="min-w-0 space-y-4">
-              <div className="rounded-lg border border-surface-border bg-surface-muted px-3 py-2">
-                <p className="text-xs font-semibold text-brand-primary">
-                  Kelas
-                </p>
-                <p className="text-4xl font-bold leading-tight text-surface-text">
-                  {student?.classroom || '-'}
-                </p>
               </div>
 
-              <div className="rounded-lg border border-surface-border bg-surface-muted px-3 py-2">
-                <p className="text-xs font-semibold text-brand-primary">Jam</p>
-                <p className="text-4xl font-bold leading-tight text-surface-text">
-                  {attendanceTime}
+              <div>
+                <p
+                  className={`text-4xl font-bold leading-tight ${
+                    panel.tapLabel === 'Tap Pulang'
+                      ? 'text-brand-primary'
+                      : student
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-surface-soft'
+                  }`}
+                >
+                  {attendanceStatus}
                 </p>
+                <div className="mt-2 text-xs font-medium text-surface-soft">
+                  {scannerStatus}
+                  {panel.lastSlotId
+                    ? ` | ${formatScannerName(panel.lastSlotId)}`
+                    : ''}
+                </div>
+                <div className="mt-1 text-xs font-medium text-surface-soft">
+                  {panel.message || config.emptyText}
+                </div>
               </div>
-
-              <div className="rounded-lg border border-surface-border bg-surface-muted px-3 py-2">
-                <p className="text-xs font-semibold text-brand-primary">
-                  Tanggal
-                </p>
-                <p className="text-4xl font-bold leading-tight text-surface-text">
-                  {attendanceDate}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <p
-            className={`text-5xl font-bold leading-tight ${
-              student
-                ? 'text-emerald-600 dark:text-emerald-400'
-                : 'text-surface-soft'
-            }`}
-          >
-            {attendanceStatus}
-          </p>
-          <div className="mt-2 text-xs font-medium text-surface-soft">
-            {scanState === 'ready'
-              ? 'Scanner aktif'
-              : scanState === 'loading'
-                ? 'Menyiapkan scanner'
-                : 'Scanner bermasalah'}
-          </div>
-        </div>
-      </article>
+            </article>
+          </section>
+        )
+      })}
     </section>
   )
 }
